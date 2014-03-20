@@ -4313,7 +4313,7 @@ void OSD::do_command(Connection *con, ceph_tid_t tid, vector<string>& cmd, buffe
 
 	  // send them the latest diff to ensure they realize the mapping
 	  // has changed.
-	  send_incremental_map(osdmap->get_epoch() - 1, con);
+	  send_incremental_map(osdmap->get_epoch() - 1, con, osdmap);
 
 	  // do not reply; they will get newer maps and realize they
 	  // need to resend.
@@ -4635,7 +4635,7 @@ bool OSD::_share_map_incoming(
     if (sendmap) {
       dout(10) << name << " has old map " << epoch
 	       << " < " << osdmap->get_epoch() << dendl;
-      send_incremental_map(epoch, con);
+      send_incremental_map(epoch, con, osdmap);
       shared = true;
     }
   }
@@ -4654,7 +4654,7 @@ bool OSD::_share_map_incoming(
 	       << " has old map " << epoch << " < "
 	       << osdmap->get_epoch() << dendl;
       note_peer_epoch(name.num(), osdmap->get_epoch());
-      send_incremental_map(epoch, con);
+      send_incremental_map(epoch, con, osdmap);
       shared = true;
     }
   }
@@ -4674,7 +4674,7 @@ void OSD::_share_map_outgoing(int peer, Connection *con, OSDMapRef map)
   epoch_t pe = get_peer_epoch(peer);
   if (pe) {
     if (pe < map->get_epoch()) {
-      send_incremental_map(pe, con);
+      send_incremental_map(pe, con, map);
       note_peer_epoch(peer, map->get_epoch());
     } else
       dout(20) << "_share_map_outgoing " << con << " already has epoch " << pe << dendl;
@@ -5952,7 +5952,8 @@ void OSD::activate_map()
 }
 
 
-MOSDMap *OSD::build_incremental_map_msg(epoch_t since, epoch_t to)
+MOSDMap *OSD::build_incremental_map_msg(epoch_t since, epoch_t to,
+                                        OSDSuperblock& superblock)
 {
   MOSDMap *m = new MOSDMap(monc->get_fsid());
   m->oldest_map = superblock.oldest_map;
@@ -5983,7 +5984,8 @@ void OSD::send_map(MOSDMap *m, Connection *con)
   msgr->send_message(m, con);
 }
 
-void OSD::send_incremental_map(epoch_t since, Connection *con)
+void OSD::send_incremental_map(epoch_t since, Connection *con,
+                               OSDMapRef& osdmap)
 {
   epoch_t to = osdmap->get_epoch();
   dout(10) << "send_incremental_map " << since << " -> " << to
@@ -6008,7 +6010,7 @@ void OSD::send_incremental_map(epoch_t since, Connection *con)
 
   if (to - since > (epoch_t)cct->_conf->osd_map_message_max)
     to = since + cct->_conf->osd_map_message_max;
-  MOSDMap *m = build_incremental_map_msg(since, to);
+  MOSDMap *m = build_incremental_map_msg(since, to, superblock);
   send_map(m, con);
 }
 
