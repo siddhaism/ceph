@@ -1263,8 +1263,14 @@ void ReplicatedPG::do_op(OpRequestRef op)
     return;
   }
 
-  if (obc && obc->ssc)
-    assert(obc->obs.exists == obc->ssc->snapset.head_exists);
+  if (obc && obc->ssc) {
+    if (obc->obs.exists != obc->ssc->snapset.head_exists) {
+      derr << __func__ << ": obc->obs.exists: " << obc->obs.exists
+	   << ", obc->ssc->snapset.head_exists: " << obc->ssc->snapset.head_exists
+	   << dendl;
+      assert(obc->obs.exists == obc->ssc->snapset.head_exists);
+    }
+  }
 
   if (hit_set) {
     hit_set->insert(oid);
