@@ -1263,6 +1263,9 @@ void ReplicatedPG::do_op(OpRequestRef op)
     return;
   }
 
+  if (obc && obc->ssc)
+    assert(obc->obs.exists == obc->ssc->snapset.head_exists);
+
   if (hit_set) {
     hit_set->insert(oid);
     if (hit_set->is_full() ||
