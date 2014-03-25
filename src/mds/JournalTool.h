@@ -97,6 +97,8 @@ class JournalScanner
   int const rank;
   JournalFilter const filter;
 
+  void gap_advance();
+
   public:
   JournalScanner(
       librados::IoCtx &io_,

@@ -495,6 +495,18 @@ int JournalScanner::scan_header()
   return 0;
 }
 
+
+/**
+ * Call this when having read from read_buf we find that 
+ * the contents are not the start of a valid entry: discard
+ * the current position as part of a gap.
+ */
+void JournalScanner::gap_advance()
+{
+
+}
+
+
 int JournalScanner::scan_events()
 {
   int r;
@@ -518,11 +530,7 @@ int JournalScanner::scan_events()
   bufferlist read_buf;
   bool gap = false;
   uint64_t gap_start = -1;
-  for (
-      uint64_t obj_offset = (read_offset / object_size);
-      obj_offset <= (header->write_pos / object_size);
-      obj_offset++) {
-
+  for (uint64_t obj_offset = (read_offset / object_size); ; obj_offset++) {
     // Read this journal segment
     bufferlist this_object;
     r = io.read(obj_name(obj_offset), this_object, INT_MAX, 0);
@@ -530,7 +538,13 @@ int JournalScanner::scan_events()
 
     // Handle absent journal segments
     if (r < 0) {
-      derr << "Missing object " << obj_name(obj_offset) << dendl;
+      if (obj_offset > (header->write_pos / object_size)) {
+        dout(4) << "Reached end of journal objects" << dendl;
+        break;
+      } else {
+        derr << "Missing object " << obj_name(obj_offset) << dendl;
+      }
+
       objects_missing.push_back(obj_offset);
       gap = true;
       gap_start = read_offset;
@@ -539,71 +553,82 @@ int JournalScanner::scan_events()
       objects_valid.push_back(obj_name(obj_offset));
     }
 
-    // Consume available events
     if (gap) {
-      // We're coming out the other side of a gap, search up to the next sentinel
+      // No valid data at the current read offset, scan forward until we find something valid looking
+      // or have to drop out to load another object.
       dout(4) << "Searching for sentinel from 0x" << std::hex << read_buf.length() << std::dec << " bytes available" << dendl;
-      while(read_buf.length() >= sizeof(Journaler::sentinel)) {
-      }
-      // TODO
-      // 1. Search forward for sentinel
-      // 2. When you find sentinel, point read_offset at it and try reading an entry, especially validate that start_ptr is
-      //    correct.
+
+      do {
+        bufferlist::iterator p;
+        uint64_t candidate_sentinel;
+        ::decode(candidate_sentinel, p);
+
+        if (candidate_sentinel == JournalStream::sentinel) {
+          ranges_invalid.push_back(Range(gap_start, -1));
+        } else {
+          // No sentinel, discard this byte
+          read_buf.splice(0, 1);
+          read_offset += 1;
+        }
+      } while (read_buf.length() >= sizeof(JournalStream::sentinel));
+      
       assert(0);
     } else {
       dout(10) << "Parsing data, 0x" << std::hex << read_buf.length() << std::dec << " bytes available" << dendl;
       while(true) {
-        uint32_t entry_size = 0;
-        uint64_t start_ptr = 0;
-        uint64_t entry_sentinel;
-        bufferlist::iterator p = read_buf.begin();
-        if (read_buf.length() >= sizeof(entry_sentinel) + sizeof(entry_size)) {
-          ::decode(entry_sentinel, p);
-          ::decode(entry_size, p);
-        } else {
+        // TODO: detect and handle legacy format journals: can do many things
+        // on them but on read errors have to give up instead of searching
+        // for sentinels.
+        JournalStream journal_stream(JOURNAL_FORMAT_RESILIENT);
+        bool readable = false;
+        try {
+          uint64_t need;
+          readable = journal_stream.readable(read_buf, need);
+        } catch (buffer::error e) {
+          readable = false;
+          dout(4) << "Invalid container encoding at 0x" << std::hex << read_offset << std::dec << dendl;
+          gap = true;
+          gap_start = read_offset;
+          read_buf.splice(0, 1);
+          read_offset += 1;
+          break;
+        }
+
+        if (!readable) {
           // Out of data, continue to read next object
           break;
         }
 
-        if (entry_sentinel != Journaler::sentinel) {
-          dout(4) << "Invalid sentinel at 0x" << std::hex << read_offset << std::dec << dendl;
+        bufferlist le_bl;  //< Serialized LogEvent blob
+        dout(10) << "Attempting decode at 0x" << std::hex << read_offset << std::dec << dendl;
+        // This cannot fail to decode because we pre-checked that a serialized entry
+        // blob would be readable.
+        uint64_t start_ptr = 0;
+        uint64_t consumed = journal_stream.read(read_buf, le_bl, start_ptr);
+        if (start_ptr != read_offset) {
+          derr << "Bad entry start ptr at 0x" << std::hex << start_ptr << std::dec << dendl;
           gap = true;
           gap_start = read_offset;
           break;
         }
 
-        if (read_buf.length() >= sizeof(entry_sentinel) + sizeof(entry_size) + entry_size + sizeof(start_ptr)) {
-          dout(10) << "Attempting decode at 0x" << std::hex << read_offset << std::dec << dendl;
-          bufferlist le_bl;
-          read_buf.splice(0, sizeof(entry_sentinel));
-          read_buf.splice(0, sizeof(entry_size));
-          read_buf.splice(0, entry_size, &le_bl);
-          read_buf.splice(0, sizeof(start_ptr));
-          // TODO: read out start_ptr and ensure that it points back to read_offset
-          // FIXME: LogEvent::decode_event contains an assertion that there is no trailing
-          // data, but we would want it to return NULL or somesuch in that case so that
-          // a corruption of length doesn't stop the scan.
-          LogEvent *le = LogEvent::decode(le_bl);
-          if (le) {
-            dout(10) << "Valid entry at 0x" << std::hex << read_offset << std::dec << dendl;
+        LogEvent *le = LogEvent::decode(le_bl);
+        if (le) {
+          dout(10) << "Valid entry at 0x" << std::hex << read_offset << std::dec << dendl;
 
-            if (filter.apply(read_offset, *le)) {
-              events[read_offset] = le;
-            } else {
-              delete le;
-            }
-            events_valid.push_back(read_offset);
-            read_offset += sizeof(entry_sentinel) + sizeof(entry_size) + entry_size + sizeof(start_ptr);
+          if (filter.apply(read_offset, *le)) {
+            events[read_offset] = le;
           } else {
-            dout(10) << "Invalid entry at 0x" << std::hex << read_offset << std::dec << dendl;
-            // Ensure we don't hit this entry again when scanning for next sentinel
-            read_offset += 1;
-            gap = true;
-            gap_start = read_offset;
+            delete le;
           }
+          events_valid.push_back(read_offset);
+          read_offset += consumed;
         } else {
-          // Out of data, continue to read next object
-          break;
+          dout(10) << "Invalid entry at 0x" << std::hex << read_offset << std::dec << dendl;
+          gap = true;
+          gap_start = read_offset;
+          read_buf.splice(0, 1);
+          read_offset += 1;
         }
       }
     }
