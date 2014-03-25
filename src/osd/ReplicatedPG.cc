@@ -1263,7 +1263,7 @@ void ReplicatedPG::do_op(OpRequestRef op)
     return;
   }
 
-  if (obc && obc->ssc) {
+  if (obc && obc->ssc && oid.is_head()) {
     if (obc->obs.exists != obc->ssc->snapset.head_exists) {
       derr << __func__ << ": obc->obs.exists: " << obc->obs.exists
 	   << ", obc->ssc->snapset.head_exists: " << obc->ssc->snapset.head_exists
