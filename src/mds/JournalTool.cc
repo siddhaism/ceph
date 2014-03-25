@@ -557,14 +557,33 @@ bool JournalScanner::is_healthy() const
   return (header_present && header_valid && ranges_invalid.empty() && objects_missing.empty());
 }
 
-bool JournalFilter::apply(uint64_t pos, LogEvent const &le) const
+bool JournalFilter::apply(uint64_t pos, LogEvent &le) const
 {
-  bool pass = true;
   if (pos < range_start || pos >= range_end) {
-    pass = false;
+    return false;
   }
 
-  return pass;
+  if (!path_expr.empty()) {
+    EMetaBlob *metablob = le.get_metablob();
+    if (metablob) {
+      std::vector<std::string> paths;
+      metablob->get_paths(paths);
+      bool match_any = false;
+      for (std::vector<std::string>::iterator p = paths.begin(); p != paths.end(); ++p) {
+        if ((*p).find(path_expr) != std::string::npos) {
+          match_any = true;
+          break;
+        }
+      }
+      if (!match_any) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 void EventOutputter::binary() const
@@ -648,34 +667,42 @@ int JournalFilter::parse_args(
   std::vector<const char*> &argv, 
   std::vector<const char*>::iterator &arg)
 {
-  assert(arg != argv.end());
-  std::string range_str;
-  if (ceph_argparse_witharg(argv, arg, &range_str, "--range", (char*)NULL)) {
-    size_t sep_loc = range_str.find(JournalFilter::range_separator);
-    if (sep_loc == std::string::npos || range_str.size() <= JournalFilter::range_separator.size()) {
-      derr << "Invalid range '" << range_str << "'" << dendl;
-      return -EINVAL;
-    }
 
-    // We have a lower bound
-    if (sep_loc > 0) {
-      std::string range_start_str = range_str.substr(0, sep_loc); 
-      std::string parse_err;
-      range_start = strict_strtoll(range_start_str.c_str(), 0, &parse_err);
-      if (!parse_err.empty()) {
-        derr << "Invalid lower bound '" << range_start_str << "': " << parse_err << dendl;
+  while(arg != argv.end()) {
+    std::string arg_str;
+    if (ceph_argparse_witharg(argv, arg, &arg_str, "--range", (char*)NULL)) {
+      size_t sep_loc = arg_str.find(JournalFilter::range_separator);
+      if (sep_loc == std::string::npos || arg_str.size() <= JournalFilter::range_separator.size()) {
+        derr << "Invalid range '" << arg_str << "'" << dendl;
         return -EINVAL;
       }
-    }
 
-    if (sep_loc < range_str.size() - JournalFilter::range_separator.size()) {
-      std::string range_end_str = range_str.substr(sep_loc + range_separator.size()); 
-      std::string parse_err;
-      range_end = strict_strtoll(range_end_str.c_str(), 0, &parse_err);
-      if (!parse_err.empty()) {
-        derr << "Invalid upper bound '" << range_end_str << "': " << parse_err << dendl;
-        return -EINVAL;
+      // We have a lower bound
+      if (sep_loc > 0) {
+        std::string range_start_str = arg_str.substr(0, sep_loc); 
+        std::string parse_err;
+        range_start = strict_strtoll(range_start_str.c_str(), 0, &parse_err);
+        if (!parse_err.empty()) {
+          derr << "Invalid lower bound '" << range_start_str << "': " << parse_err << dendl;
+          return -EINVAL;
+        }
       }
+
+      if (sep_loc < arg_str.size() - JournalFilter::range_separator.size()) {
+        std::string range_end_str = arg_str.substr(sep_loc + range_separator.size()); 
+        std::string parse_err;
+        range_end = strict_strtoll(range_end_str.c_str(), 0, &parse_err);
+        if (!parse_err.empty()) {
+          derr << "Invalid upper bound '" << range_end_str << "': " << parse_err << dendl;
+          return -EINVAL;
+        }
+      }
+    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--path", (char*)NULL)) {
+      dout(4) << "Filtering by path '" << arg_str << "'" << dendl;
+      path_expr = arg_str;
+    } else {
+      // We're done with args the filter understands
+      break;
     }
   }
 

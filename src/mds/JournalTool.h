@@ -25,12 +25,14 @@ class JournalFilter
   uint64_t range_end;
   static const std::string range_separator;
 
+  std::string path_expr;  //< Pattern which 
+
   public:
   JournalFilter() : 
     range_start(0),
     range_end(-1) {}
 
-  bool apply(uint64_t pos, LogEvent const &le) const;
+  bool apply(uint64_t pos, LogEvent &le) const;
   int parse_args(
     std::vector<const char*> &argv, 
     std::vector<const char*>::iterator &arg);
