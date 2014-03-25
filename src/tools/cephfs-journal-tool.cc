@@ -18,13 +18,18 @@ int main(int argc, const char **argv)
   common_init_finish(g_ceph_context);
 
   JournalTool jt;
-  jt.init();
-  int rc = jt.main(args);
-  jt.shutdown();
+  int rc = jt.init();
+  if (rc != 0) {
+      std::cerr << "Error in initialization: " << cpp_strerror(rc) << std::endl;
+      return rc;
+  }
 
+  rc = jt.main(args);
   if (rc != 0) {
     std::cerr << "Error (" << cpp_strerror(rc) << ")" << std::endl;
   }
+
+  jt.shutdown();
 
   return rc;
 }

@@ -1,8 +1,6 @@
 libmds_la_SOURCES = \
 	mds/Anchor.cc \
 	mds/Capability.cc \
-	mds/Dumper.cc \
-	mds/Resetter.cc \
 	mds/MDS.cc \
 	mds/flock.cc \
 	mds/locks.c \
@@ -27,8 +25,7 @@ libmds_la_SOURCES = \
 	mds/SnapServer.cc \
 	mds/snap.cc \
 	mds/SessionMap.cc \
-	mds/MDLog.cc \
-	mds/MDSUtility.cc
+	mds/MDLog.cc
 libmds_la_LIBADD = $(LIBOSDC)
 noinst_LTLIBRARIES += libmds.la
 

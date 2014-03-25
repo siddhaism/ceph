@@ -12,6 +12,8 @@
 #include "osdc/Journaler.h"
 #include "mds/mdstypes.h"
 #include "mds/LogEvent.h"
+#include "mds/Dumper.h"
+#include "mds/Resetter.h"
 
 // Hack, special case for getting metablob, replace with generic
 #include "mds/events/EUpdate.h"
@@ -42,16 +44,6 @@ void JournalTool::usage()
 
 JournalTool::~JournalTool()
 {
-}
-
-void JournalTool::init()
-{
-  MDSUtility::init();
-}
-
-void JournalTool::shutdown()
-{
-  MDSUtility::shutdown();
 }
 
 
@@ -137,13 +129,23 @@ int JournalTool::main(std::vector<const char*> &argv)
  */
 int JournalTool::main_journal(std::vector<const char*> &argv)
 {
-    std::string command = argv[0];
-    if (command == "inspect") {
-      return journal_inspect();
+  std::string command = argv[0];
+  if (command == "inspect") {
+    return journal_inspect();
+  } else if (command == "export" || command == "import") {
+    if (argv.size() >= 2) {
+      std::string const path = argv[1];
+      return journal_export(path, command == "import");
     } else {
-      derr << "Bad journal command '" << command << "'" << dendl;
+      derr << "Missing path" << dendl;
       return -EINVAL;
     }
+  } else if (command == "reset") {
+      return journal_reset();
+  } else {
+    derr << "Bad journal command '" << command << "'" << dendl;
+    return -EINVAL;
+  }
 }
 
 
@@ -350,6 +352,72 @@ int JournalTool::journal_inspect()
   dout(1) << "Journal scanned, healthy=" << js.is_healthy() << dendl;
 
   return 0;
+}
+
+
+/**
+ * Attempt to export a binary dump of the journal.
+ *
+ * This is allowed to fail if the header is malformed or there are
+ * objects inaccessible, in which case the user would have to fall
+ * back to manually listing RADOS objects and extracting them, which
+ * they can do with the ``rados`` CLI.
+ */
+int JournalTool::journal_export(std::string const &path, bool import)
+{
+  int r = 0;
+  Dumper dumper;
+  JournalScanner js(io, rank);
+
+  /*
+   * Check that the header is valid and no objects are missing before
+   * trying to dump
+   */
+  r = js.scan();
+  if (r < 0) {
+    derr << "Unable to scan journal, assuming badly damaged" << dendl;
+    return r;
+  }
+  if (!js.is_readable()) {
+    derr << "Journal not readable, attempt object-by-object dump with `rados`" << dendl;
+    return -EIO;
+  }
+
+  /*
+   * Assuming we can cleanly read the journal data, dump it out to a file
+   */
+  r = dumper.init(rank);
+  if (r < 0) {
+    derr << "dumper::init failed: " << cpp_strerror(r) << dendl;
+    return r;
+  }
+  if (import) {
+    dumper.undump(path.c_str());
+  } else {
+    dumper.dump(path.c_str());
+  }
+  dumper.shutdown();
+
+  return r;
+}
+
+
+/**
+ * Truncate journal and insert EResetJournal
+ */
+int JournalTool::journal_reset()
+{
+  int r = 0;
+  Resetter resetter;
+  r = resetter.init(rank);
+  if (r < 0) {
+    derr << "resetter::init failed: " << cpp_strerror(r) << dendl;
+    return r;
+  }
+  resetter.reset();
+  resetter.shutdown();
+
+  return r;
 }
 
 std::string JournalScanner::obj_name(uint64_t offset) const
@@ -560,7 +628,6 @@ JournalScanner::~JournalScanner()
     delete header;
     header = NULL;
   }
-#if 0
   dout(4) << events.size() << " events" << dendl;
   for (EventMap::iterator i = events.begin(); i != events.end(); ++i) {
     dout(4) << "Deleting " << i->second << dendl;
@@ -568,12 +635,22 @@ JournalScanner::~JournalScanner()
     dout(4) << "Deleted" << dendl;
   }
   events.clear();
-#endif
 }
 
+/**
+ * Whether the journal data looks valid and replayable
+ */
 bool JournalScanner::is_healthy() const
 {
   return (header_present && header_valid && ranges_invalid.empty() && objects_missing.empty());
+}
+
+/**
+ * Whether the journal data can be read from RADOS
+ */
+bool JournalScanner::is_readable() const
+{
+  return (header_present && header_valid && objects_missing.empty());
 }
 
 bool JournalFilter::apply(uint64_t pos, LogEvent &le) const

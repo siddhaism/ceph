@@ -59,6 +59,8 @@ class JournalTool : public MDSUtility
 
     // Journal operations
     int journal_inspect();
+    int journal_export(std::string const &path, bool import);
+    int journal_reset();
 
     // Header operations
     int header_set();
@@ -75,8 +77,6 @@ class JournalTool : public MDSUtility
     JournalTool() :
       rank(0) {}
     ~JournalTool();
-    void init();
-    void shutdown();
     int main(std::vector<const char*> &argv);
 };
 
@@ -95,8 +95,7 @@ class JournalScanner
 
   // Input constraints
   int const rank;
-  JournalFilter const &filter;
-
+  JournalFilter const filter;
 
   public:
   JournalScanner(
@@ -109,6 +108,16 @@ class JournalScanner
     header_present(false),
     header_valid(false),
     header(NULL) {};
+
+  JournalScanner(
+      librados::IoCtx &io_,
+      int rank_) :
+    io(io_),
+    rank(rank_),
+    header_present(false),
+    header_valid(false),
+    header(NULL) {};
+
   ~JournalScanner();
 
   std::string obj_name(uint64_t offset) const;
@@ -125,11 +134,16 @@ class JournalScanner
   Journaler::Header *header;
 
   bool is_healthy() const;
+  bool is_readable() const;
   std::vector<std::string> objects_valid;
   std::vector<uint64_t> objects_missing;
   std::vector<Range> ranges_invalid;
   std::vector<uint64_t> events_valid;
   EventMap events;
+
+  private:
+  // Forbid copy construction because I have ptr members
+  JournalScanner(const JournalScanner &rhs);
 };
 
 
@@ -139,7 +153,7 @@ class JournalScanner
 class EventOutputter
 {
   private:
-    JournalScanner scan;
+    JournalScanner const &scan;
     std::string const path;
 
   public:

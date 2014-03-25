@@ -41,7 +41,6 @@ public:
   int recover_journal();
   void dump(const char *dumpfile);
   void undump(const char *dumpfile);
-  void dump_entries();
 };
 
 #endif /* JOURNAL_DUMPER_H_ */
