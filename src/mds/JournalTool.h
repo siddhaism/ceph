@@ -13,6 +13,7 @@ namespace librados {
 }
 
 class LogEvent;
+class EMetaBlob;
 
 
 /**
@@ -65,6 +66,9 @@ class JournalTool : public MDSUtility
     // I/O handles
     librados::Rados rados;
     librados::IoCtx io;
+
+    // Metadata backing store manipulation
+    int replay_offline(EMetaBlob &metablob, bool const dry_run);
 
   public:
     void usage();
