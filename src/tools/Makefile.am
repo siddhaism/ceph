@@ -71,6 +71,10 @@ rados_SOURCES += common/obj_bencher.cc # needs cleanup so it can go in libcommon
 rados_LDADD = libcls_lock_client.la $(LIBRADOS) $(CEPH_GLOBAL)
 bin_PROGRAMS += rados
 
+cephfs_journal_tool_SOURCES = tools/cephfs-journal-tool.cc mds/JournalTool.cc
+cephfs_journal_tool_LDADD = -lboost_system -lboost_filesystem $(LIBRADOS) $(LIBMDS) $(LIBOSDC) $(CEPH_GLOBAL) $(LIBCOMMON)
+bin_PROGRAMS += cephfs-journal-tool
+
 if WITH_REST_BENCH
 rest_bench_SOURCES = tools/rest_bench.cc
 rest_bench_SOURCES += common/obj_bencher.cc # needs cleanup so it can go in libcommon.la
