@@ -460,9 +460,11 @@ uint64_t Journaler::append_entry(bufferlist& bl)
   ldout(cct, 10) << "append_entry len " << bl.length() << " to " << write_pos << "~" << (bl.length() + sizeof(uint32_t)) << dendl;
   
   // append
+  ::encode(sentinel, write_buf);
   ::encode(s, write_buf);
   write_buf.claim_append(bl);
-  write_pos += sizeof(s) + s;
+  ::encode(write_pos, write_buf);
+  write_pos += sizeof(sentinel) + sizeof(s) + s + sizeof(write_pos);
 
   // flush previous object?
   uint64_t su = get_layout_period();
@@ -869,14 +871,22 @@ bool Journaler::_is_readable()
 
   // have enough for entry size?
   uint32_t s = 0;
+  uint64_t start_ptr = 0;
+  uint64_t entry_sentinel;
   bufferlist::iterator p = read_buf.begin();
-  if (read_buf.length() >= sizeof(s))
+
+  if (read_buf.length() >= sizeof(s) + sizeof(entry_sentinel) + sizeof(start_ptr)) {
+    ::decode(entry_sentinel, p);
     ::decode(s, p);
+    assert(entry_sentinel == Journaler::sentinel);
+  }
+
+
 
   // entry and payload?
-  if (read_buf.length() >= sizeof(s) &&
-      read_buf.length() >= sizeof(s) + s) 
+  if (read_buf.length() >= sizeof(s) + s + sizeof(start_ptr)) {
     return true;  // yep, next entry is ready.
+  }
 
   ldout (cct, 10) << "_is_readable read_buf.length() == " << read_buf.length()
 		  << ", but need " << s + sizeof(s)
@@ -932,11 +942,16 @@ bool Journaler::try_read_entry(bufferlist& bl)
     return false;
   }
   
+
+  uint64_t start_ptr = 0;
+  uint64_t entry_sentinel;
   uint32_t s;
   {
     bufferlist::iterator p = read_buf.begin();
+    ::decode(entry_sentinel, p);
     ::decode(s, p);
   }
+  assert(entry_sentinel == Journaler::sentinel);
   assert(read_buf.length() >= sizeof(s) + s);
   
   ldout(cct, 10) << "try_read_entry at " << read_pos << " reading " 
@@ -950,9 +965,11 @@ bool Journaler::try_read_entry(bufferlist& bl)
 
   // do it
   assert(bl.length() == 0);
+  read_buf.splice(0, sizeof(entry_sentinel));
   read_buf.splice(0, sizeof(s));
   read_buf.splice(0, s, &bl);
-  read_pos += sizeof(s) + s;
+  read_buf.splice(0, sizeof(start_ptr));
+  read_pos += sizeof(entry_sentinel) + sizeof(s) + s + sizeof(start_ptr);
 
   // prefetch?
   _prefetch();

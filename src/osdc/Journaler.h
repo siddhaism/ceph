@@ -60,6 +60,10 @@ class CephContext;
 class Context;
 class PerfCounters;
 
+// A magic number for the start of journal entries, so that we can
+// identify them in damaged journals.
+#define JOURNAL_SENTINEL 0x3141592653589793
+
 class Journaler {
 public:
   CephContext *cct;
@@ -132,6 +136,10 @@ public:
     }
   } last_written, last_committed;
   WRITE_CLASS_ENCODER(Header)
+
+  // A magic number for the start of journal entries, so that we can
+  // identify them in damaged journals.
+  static const uint64_t sentinel = 0x3141592653589793;
 
 private:
   // me
