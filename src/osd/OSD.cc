@@ -3206,6 +3206,22 @@ void OSD::tick()
 
   logger->set(l_osd_buf, buffer::get_total_alloc());
 
+  if (is_active()) {
+    // decide if we are behind on maps
+    epoch_t min_epoch = service.get_min_pg_epoch();
+    if (min_epoch &&
+	min_epoch + g_conf->osd_map_max_lag < osdmap->get_epoch()) {
+      dout(1) << "min pg epoch " << min_epoch
+	      << " is too far behind latest " << osdmap->get_epoch()
+	      << ", marking self down to catch up" << dendl;
+      monc->send_mon_message(new MOSDMarkMeDown(monc->get_fsid(),
+						osdmap->get_inst(whoami),
+						osdmap->get_epoch(),
+						false
+						));
+    }
+  }
+
   if (is_active() || is_waiting_for_healthy()) {
     map_lock.get_read();
 
