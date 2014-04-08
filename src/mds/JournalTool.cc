@@ -676,11 +676,25 @@ bool JournalScanner::is_readable() const
   return (header_present && header_valid && objects_missing.empty());
 }
 
+/*
+ * Return whether a LogEvent is to be included or excluded.
+ *
+ * The filter parameters are applied on an AND basis: if any
+ * condition is not met, the event is excluded.  Try to do
+ * the fastest checks first.
+ */
 bool JournalFilter::apply(uint64_t pos, LogEvent &le) const
 {
   /* Filtering by journal offset range */
   if (pos < range_start || pos >= range_end) {
     return false;
+  }
+
+  /* Filtering by event type */
+  if (event_type != 0) {
+    if (le.get_type() != event_type) {
+      return false;
+    }
   }
 
   /* Filtering by file path */
@@ -724,7 +738,6 @@ bool JournalFilter::apply(uint64_t pos, LogEvent &le) const
       return false;
     }
   }
-
   return true;
 }
 
@@ -842,13 +855,20 @@ int JournalFilter::parse_args(
       dout(4) << "Filtering by path '" << arg_str << "'" << dendl;
       path_expr = arg_str;
     } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--inode", (char*)NULL)) {
-        dout(4) << "Filtering by inode '" << arg_str << "'" << dendl;
-        std::string parse_err;
-        inode = strict_strtoll(arg_str.c_str(), 0, &parse_err);
-        if (!parse_err.empty()) {
-          derr << "Invalid inode '" << arg_str << "': " << parse_err << dendl;
-          return -EINVAL;
-        }
+      dout(4) << "Filtering by inode '" << arg_str << "'" << dendl;
+      std::string parse_err;
+      inode = strict_strtoll(arg_str.c_str(), 0, &parse_err);
+      if (!parse_err.empty()) {
+        derr << "Invalid inode '" << arg_str << "': " << parse_err << dendl;
+        return -EINVAL;
+      }
+    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--type", (char*)NULL)) {
+      std::string parse_err;
+      event_type = LogEvent::str_to_type(arg_str);
+      if (event_type == LogEvent::EventType(-1)) {
+        derr << "Invalid event type '" << arg_str << "': " << parse_err << dendl;
+        return -EINVAL;
+      }
     } else {
       // We're done with args the filter understands
       break;

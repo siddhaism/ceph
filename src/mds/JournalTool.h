@@ -5,6 +5,8 @@
 #include <vector>
 
 #include "mds/mdstypes.h"
+#include "mds/LogEvent.h"
+
 // For Journaler::Header, can't forward-declare nested classes
 #include <osdc/Journaler.h>
 #include "include/rados/librados.hpp"
@@ -36,7 +38,7 @@ class JournalFilter
   inodeno_t inode;
 
   /* Filtering by type */
-  std::string type;
+  LogEvent::EventType event_type;
 
   /* Filtering by dirfrag */
   dirfrag_t frag;
@@ -46,7 +48,8 @@ class JournalFilter
   JournalFilter() : 
     range_start(0),
     range_end(-1),
-    inode(0) {}
+    inode(0),
+    event_type(0) {}
 
   bool apply(uint64_t pos, LogEvent &le) const;
   int parse_args(
