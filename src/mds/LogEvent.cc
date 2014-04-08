@@ -90,6 +90,35 @@ std::string LogEvent::get_type_str() const
 }
 
 
+/*
+ * Resolve type string to type enum
+ *
+ * Return -1 if not found
+ */
+__u32 LogEvent::str_to_type(std::string const &str)
+{
+  std::map<std::string, __u32> types;
+  types["SUBTREEMAP"] = EVENT_SUBTREEMAP;
+  types["SUBTREEMAP_TEST"] = EVENT_SUBTREEMAP_TEST;
+  types["EXPORT"] = EVENT_EXPORT;
+  types["IMPORTSTART"] = EVENT_IMPORTSTART;
+  types["IMPORTFINISH"] = EVENT_IMPORTFINISH;
+  types["FRAGMENT"] = EVENT_FRAGMENT;
+  types["RESETJOURNAL"] = EVENT_RESETJOURNAL;
+  types["SESSION"] = EVENT_SESSION;
+  types["SESSIONS_OLD"] = EVENT_SESSIONS_OLD;
+  types["SESSIONS"] = EVENT_SESSIONS;
+  types["UPDATE"] = EVENT_UPDATE;
+  types["SLAVEUPDATE"] = EVENT_SLAVEUPDATE;
+  types["OPEN"] = EVENT_OPEN;
+  types["COMMITTED"] = EVENT_COMMITTED;
+  types["TABLECLIENT"] = EVENT_TABLECLIENT;
+  types["TABLESERVER"] = EVENT_TABLESERVER;
+
+  return types[str];
+}
+
+
 LogEvent *LogEvent::decode_event(bufferlist& bl, bufferlist::iterator& p, __u32 type)
 {
   int length = bl.length() - p.get_off();
