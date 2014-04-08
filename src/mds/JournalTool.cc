@@ -275,7 +275,7 @@ int JournalTool::main_event(std::vector<const char*> &argv)
     if (ceph_argparse_witharg(argv, arg, &arg_str, "--path", (char*)NULL)) {
       output_path = arg_str;
     } else {
-      derr << "Unknown argument: '" << *arg << dendl;
+      derr << "Unknown argument: '" << *arg << "'" << dendl;
       return -EINVAL;
     }
   }
@@ -655,9 +655,7 @@ JournalScanner::~JournalScanner()
   }
   dout(4) << events.size() << " events" << dendl;
   for (EventMap::iterator i = events.begin(); i != events.end(); ++i) {
-    dout(4) << "Deleting " << i->second << dendl;
     delete i->second;
-    dout(4) << "Deleted" << dendl;
   }
   events.clear();
 }
@@ -680,10 +678,12 @@ bool JournalScanner::is_readable() const
 
 bool JournalFilter::apply(uint64_t pos, LogEvent &le) const
 {
+  /* Filtering by journal offset range */
   if (pos < range_start || pos >= range_end) {
     return false;
   }
 
+  /* Filtering by file path */
   if (!path_expr.empty()) {
     EMetaBlob *metablob = le.get_metablob();
     if (metablob) {
@@ -692,6 +692,27 @@ bool JournalFilter::apply(uint64_t pos, LogEvent &le) const
       bool match_any = false;
       for (std::vector<std::string>::iterator p = paths.begin(); p != paths.end(); ++p) {
         if ((*p).find(path_expr) != std::string::npos) {
+          match_any = true;
+          break;
+        }
+      }
+      if (!match_any) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+  }
+
+  /* Filtering by inode */
+  if (inode) {
+    EMetaBlob *metablob = le.get_metablob();
+    if (metablob) {
+      std::set<inodeno_t> inodes;
+      metablob->get_inodes(inodes);
+      bool match_any = false;
+      for (std::set<inodeno_t>::iterator i = inodes.begin(); i != inodes.end(); ++i) {
+        if (*i == inode) {
           match_any = true;
           break;
         }
@@ -788,7 +809,6 @@ int JournalFilter::parse_args(
   std::vector<const char*> &argv, 
   std::vector<const char*>::iterator &arg)
 {
-
   while(arg != argv.end()) {
     std::string arg_str;
     if (ceph_argparse_witharg(argv, arg, &arg_str, "--range", (char*)NULL)) {
@@ -821,6 +841,14 @@ int JournalFilter::parse_args(
     } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--path", (char*)NULL)) {
       dout(4) << "Filtering by path '" << arg_str << "'" << dendl;
       path_expr = arg_str;
+    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--inode", (char*)NULL)) {
+        dout(4) << "Filtering by inode '" << arg_str << "'" << dendl;
+        std::string parse_err;
+        inode = strict_strtoll(arg_str.c_str(), 0, &parse_err);
+        if (!parse_err.empty()) {
+          derr << "Invalid inode '" << arg_str << "': " << parse_err << dendl;
+          return -EINVAL;
+        }
     } else {
       // We're done with args the filter understands
       break;

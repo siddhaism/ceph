@@ -4,6 +4,7 @@
 #include "mds/MDSUtility.h"
 #include <vector>
 
+#include "mds/mdstypes.h"
 // For Journaler::Header, can't forward-declare nested classes
 #include <osdc/Journaler.h>
 #include "include/rados/librados.hpp"
@@ -22,16 +23,30 @@ class EMetaBlob;
 class JournalFilter
 {
   private:
+
+  /* Filtering by journal offset range */
   uint64_t range_start;
   uint64_t range_end;
   static const std::string range_separator;
 
-  std::string path_expr;  //< Pattern which 
+  /* Filtering by file (sub) path */
+  std::string path_expr;
+
+  /* Filtering by inode */
+  inodeno_t inode;
+
+  /* Filtering by type */
+  std::string type;
+
+  /* Filtering by dirfrag */
+  dirfrag_t frag;
+  std::string frag_dentry;  //< optional, filter dentry name within fragment
 
   public:
   JournalFilter() : 
     range_start(0),
-    range_end(-1) {}
+    range_end(-1),
+    inode(0) {}
 
   bool apply(uint64_t pos, LogEvent &le) const;
   int parse_args(
