@@ -41,7 +41,7 @@ LogEvent *LogEvent::decode(bufferlist& bl)
 {
   // parse type, length
   bufferlist::iterator p = bl.begin();
-  __u32 type;
+  EventType type;
   LogEvent *event = NULL;
   ::decode(type, p);
 
@@ -95,9 +95,9 @@ std::string LogEvent::get_type_str() const
  *
  * Return -1 if not found
  */
-__u32 LogEvent::str_to_type(std::string const &str)
+LogEvent::EventType LogEvent::str_to_type(std::string const &str)
 {
-  std::map<std::string, __u32> types;
+  std::map<std::string, EventType> types;
   types["SUBTREEMAP"] = EVENT_SUBTREEMAP;
   types["SUBTREEMAP_TEST"] = EVENT_SUBTREEMAP_TEST;
   types["EXPORT"] = EVENT_EXPORT;
@@ -119,7 +119,7 @@ __u32 LogEvent::str_to_type(std::string const &str)
 }
 
 
-LogEvent *LogEvent::decode_event(bufferlist& bl, bufferlist::iterator& p, __u32 type)
+LogEvent *LogEvent::decode_event(bufferlist& bl, bufferlist::iterator& p, LogEvent::EventType type)
 {
   int length = bl.length() - p.get_off();
   generic_dout(15) << "decode_log_event type " << type << ", size " << length << dendl;
