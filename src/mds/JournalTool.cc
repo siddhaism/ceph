@@ -697,6 +697,70 @@ bool JournalFilter::apply(uint64_t pos, LogEvent &le) const
     }
   }
 
+  /* Filtering by inode */
+  if (inode) {
+    EMetaBlob *metablob = le.get_metablob();
+    if (metablob) {
+      std::set<inodeno_t> inodes;
+      metablob->get_inodes(inodes);
+      bool match_any = false;
+      for (std::set<inodeno_t>::iterator i = inodes.begin(); i != inodes.end(); ++i) {
+        if (*i == inode) {
+          match_any = true;
+          break;
+        }
+      }
+      if (!match_any) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+  }
+
+  /* Filtering by frag and dentry */
+  if (!frag_dentry.empty() || frag.ino) {
+    EMetaBlob *metablob = le.get_metablob();
+    if (metablob) {
+      std::map<dirfrag_t, std::set<std::string> > dentries;
+      metablob->get_dentries(dentries);
+
+      if (frag.ino) {
+        bool match_any = false;
+        for (std::map<dirfrag_t, std::set<std::string> >::iterator i = dentries.begin();
+            i != dentries.end(); ++i) {
+          if (i->first == frag) {
+            match_any = true;
+            break;
+          }
+        }
+        if (!match_any) {
+          return false;
+        }
+      }
+
+      if (!frag_dentry.empty()) {
+        bool match_any = false;
+        for (std::map<dirfrag_t, std::set<std::string> >::iterator i = dentries.begin();
+            i != dentries.end() && !match_any; ++i) {
+          std::set<std::string> const &names = i->second;
+          for (std::set<std::string>::iterator j = names.begin();
+              j != names.end() && !match_any; ++j) {
+            if (*j == frag_dentry) {
+              match_any = true;
+            }
+          }
+        }
+        if (!match_any) {
+          return false;
+        }
+      }
+
+    } else {
+      return false;
+    }
+  }
+
   /* Filtering by file path */
   if (!path_expr.empty()) {
     EMetaBlob *metablob = le.get_metablob();
@@ -718,26 +782,6 @@ bool JournalFilter::apply(uint64_t pos, LogEvent &le) const
     }
   }
 
-  /* Filtering by inode */
-  if (inode) {
-    EMetaBlob *metablob = le.get_metablob();
-    if (metablob) {
-      std::set<inodeno_t> inodes;
-      metablob->get_inodes(inodes);
-      bool match_any = false;
-      for (std::set<inodeno_t>::iterator i = inodes.begin(); i != inodes.end(); ++i) {
-        if (*i == inode) {
-          match_any = true;
-          break;
-        }
-      }
-      if (!match_any) {
-        return false;
-      }
-    } else {
-      return false;
-    }
-  }
   return true;
 }
 
@@ -869,6 +913,38 @@ int JournalFilter::parse_args(
         derr << "Invalid event type '" << arg_str << "': " << parse_err << dendl;
         return -EINVAL;
       }
+
+    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--frag", (char*)NULL)) {
+      std::string const frag_sep = ".";
+      size_t sep_loc = arg_str.find(frag_sep);
+      std::string inode_str;
+      std::string frag_str;
+      if (sep_loc != std::string::npos) {
+        inode_str = arg_str.substr(0, sep_loc);
+        frag_str = arg_str.substr(sep_loc + 1);
+      } else {
+        inode_str = arg_str;
+        frag_str = "0";
+      }
+
+      std::string parse_err;
+      inodeno_t frag_ino = strict_strtoll(inode_str.c_str(), 0, &parse_err);
+      if (!parse_err.empty()) {
+        derr << "Invalid inode '" << inode_str << "': " << parse_err << dendl;
+        return -EINVAL;
+      }
+
+      uint32_t frag_enc = strict_strtoll(frag_str.c_str(), 0, &parse_err);
+      if (!parse_err.empty()) {
+        derr << "Invalid frag '" << frag_str << "': " << parse_err << dendl;
+        return -EINVAL;
+      }
+
+      frag = dirfrag_t(frag_ino, frag_t(frag_enc));
+      dout(4) << "dirfrag filter: '" << frag << "'" << dendl;
+    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--dname", (char*)NULL)) {
+      frag_dentry = arg_str;
+      dout(4) << "dentry filter: '" << frag_dentry << "'" << dendl;
     } else {
       // We're done with args the filter understands
       break;

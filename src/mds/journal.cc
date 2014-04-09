@@ -890,9 +890,8 @@ void EMetaBlob::get_inodes(
 void EMetaBlob::get_dentries(std::map<dirfrag_t, std::set<std::string> > &dentries)
 {
   for (std::map<dirfrag_t, dirlump>::iterator i = lump_map.begin(); i != lump_map.end(); ++i) {
-    inodeno_t const dir_ino = i->first.ino;
     dirlump &dl = i->second;
-    dirfrag_t &df = i->first;
+    dirfrag_t const &df = i->first;
 
     // Get all bits
     dl._decode_bits();
