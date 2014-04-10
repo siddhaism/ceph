@@ -90,6 +90,9 @@ class JournalTool : public MDSUtility
     // Metadata backing store manipulation
     int replay_offline(EMetaBlob &metablob, bool const dry_run);
 
+    // Splicing
+    int erase_region(uint64_t const pos, uint64_t const length);
+
   public:
     void usage();
     JournalTool() :
@@ -140,15 +143,20 @@ class JournalScanner
 
   ~JournalScanner();
 
-  std::string obj_name(uint64_t offset) const;
-
   int scan(bool const full=true);
   int scan_header();
   int scan_events();
 
   // The results of the scan
+  class EventRecord {
+    public:
+    EventRecord() : log_event(NULL), raw_size(0) {}
+    EventRecord(LogEvent *le, uint32_t rs) : log_event(le), raw_size(rs) {}
+    LogEvent *log_event;
+    uint32_t raw_size;  //< Size from start offset including all encoding overhead
+  };
+  typedef std::map<uint64_t, EventRecord> EventMap;
   typedef std::pair<uint64_t, uint64_t> Range;
-  typedef std::map<uint64_t, LogEvent*> EventMap;
   bool header_present;
   bool header_valid;
   Journaler::Header *header;

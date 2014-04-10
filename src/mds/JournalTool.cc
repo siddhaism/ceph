@@ -14,9 +14,11 @@
 #include "mds/LogEvent.h"
 #include "mds/Dumper.h"
 #include "mds/Resetter.h"
+#include "mds/events/ENoOp.h"
 
 // Hack, special case for getting metablob, replace with generic
 #include "mds/events/EUpdate.h"
+
 
 #include "JournalTool.h"
 
@@ -24,6 +26,16 @@
 
 
 const string JournalFilter::range_separator("..");
+
+
+static std::string obj_name(uint64_t offset, int const rank)
+{
+  char header_name[60];
+  snprintf(header_name, sizeof(header_name), "%llx.%08llx",
+      (unsigned long long)(MDS_INO_LOG_OFFSET + rank),
+      (unsigned long long)offset);
+  return std::string(header_name);
+}
 
 
 void JournalTool::usage()
@@ -225,7 +237,7 @@ int JournalTool::main_header(std::vector<const char*> &argv)
     dout(4) << "Writing object..." << dendl;
     bufferlist header_bl;
     ::encode(*(js.header), header_bl);
-    io.write_full(js.obj_name(0), header_bl);
+    io.write_full(obj_name(0, rank), header_bl);
     dout(4) << "Write complete." << dendl;
   } else {
     derr << "Bad header command '" << command << "'" << dendl;
@@ -248,6 +260,12 @@ int JournalTool::main_event(std::vector<const char*> &argv)
   std::vector<const char*>::iterator arg = argv.begin();
 
   std::string command = *(arg++);
+  if (command != "get" && command != "apply" && command != "splice") {
+    derr << "Unknown argument '" << command << "'" << dendl;
+    usage();
+    return -EINVAL;
+  }
+
   if (arg == argv.end()) {
     derr << "Incomplete command line" << dendl;
     usage();
@@ -269,6 +287,13 @@ int JournalTool::main_event(std::vector<const char*> &argv)
     usage();
   }
   std::string output_style = *(arg++);
+  if (output_style != "binary" && output_style != "json" &&
+      output_style != "summary" && output_style != "list") {
+      derr << "Unknown argument: '" << output_style << "'" << dendl;
+      usage();
+      return -EINVAL;
+  }
+
   std::string output_path = "dump";
   while(arg != argv.end()) {
     std::string arg_str;
@@ -276,6 +301,7 @@ int JournalTool::main_event(std::vector<const char*> &argv)
       output_path = arg_str;
     } else {
       derr << "Unknown argument: '" << *arg << "'" << dendl;
+      usage();
       return -EINVAL;
     }
   }
@@ -302,14 +328,34 @@ int JournalTool::main_event(std::vector<const char*> &argv)
     }
 
     for (JournalScanner::EventMap::iterator i = js.events.begin(); i != js.events.end(); ++i) {
-      LogEvent *le = i->second;
+      LogEvent *le = i->second.log_event;
       EMetaBlob *mb = le->get_metablob();
       if (mb) {
         replay_offline(*mb, dry_run);
       }
     }
+  } else if (command == "splice") {
+    r = js.scan();
+    if (r) {
+      derr << "Failed to scan journal (" << cpp_strerror(r) << ")" << dendl;
+      return r;
+    }
+
+    for (JournalScanner::EventMap::iterator i = js.events.begin(); i != js.events.end(); ++i) {
+      dout(4) << "Erasing offset 0x" << std::hex << i->first << std::dec << dendl;
+      // TODO: as well as overwriting selected events, give them a way
+      // to overwrite invalid and missing regions
+
+      int r = erase_region(i->first, i->second.raw_size);
+      if (r) {
+        derr << "Failed to erase event 0x" << std::hex << i->first << std::dec
+             << ": " << cpp_strerror(r) << dendl;
+        return r;
+      }
+    }
   } else {
-    derr << "Bad journal command '" << command << "'" << dendl;
+    derr << "Unknown argument '" << command << "'" << dendl;
+    usage();
     return -EINVAL;
   }
 
@@ -420,14 +466,6 @@ int JournalTool::journal_reset()
   return r;
 }
 
-std::string JournalScanner::obj_name(uint64_t offset) const
-{
-  char header_name[60];
-  snprintf(header_name, sizeof(header_name), "%llx.%08llx",
-      (unsigned long long)(MDS_INO_LOG_OFFSET + rank),
-      (unsigned long long)offset);
-  return std::string(header_name);
-}
 
 /**
  * Read journal header, followed by sequential scan through journal space.
@@ -460,7 +498,7 @@ int JournalScanner::scan_header()
   int r;
 
   bufferlist header_bl;
-  std::string header_name = obj_name(0);
+  std::string header_name = obj_name(0, rank);
   dout(4) << "JournalScanner::scan: reading header object '" << header_name << "'" << dendl;
   r = io.read(header_name, header_bl, INT_MAX, 0);
   if (r < 0) {
@@ -533,8 +571,8 @@ int JournalScanner::scan_events()
   for (uint64_t obj_offset = (read_offset / object_size); ; obj_offset++) {
     // Read this journal segment
     bufferlist this_object;
-    r = io.read(obj_name(obj_offset), this_object, INT_MAX, 0);
-    this_object.copy(0, this_object.length(), read_buf);
+    std::string const oid = obj_name(obj_offset, rank);
+    r = io.read(oid, this_object, INT_MAX, 0);
 
     // Handle absent journal segments
     if (r < 0) {
@@ -542,7 +580,7 @@ int JournalScanner::scan_events()
         dout(4) << "Reached end of journal objects" << dendl;
         break;
       } else {
-        derr << "Missing object " << obj_name(obj_offset) << dendl;
+        derr << "Missing object " << oid << dendl;
       }
 
       objects_missing.push_back(obj_offset);
@@ -550,29 +588,37 @@ int JournalScanner::scan_events()
       gap_start = read_offset;
       continue;
     } else {
-      objects_valid.push_back(obj_name(obj_offset));
+      dout(4) << "Read 0x" << std::hex << this_object.length() << std::dec
+              << " bytes from " << oid << " gap=" << gap << dendl;
+      objects_valid.push_back(oid);
+      this_object.copy(0, this_object.length(), read_buf);
     }
 
     if (gap) {
       // No valid data at the current read offset, scan forward until we find something valid looking
       // or have to drop out to load another object.
-      dout(4) << "Searching for sentinel from 0x" << std::hex << read_buf.length() << std::dec << " bytes available" << dendl;
+      dout(4) << "Searching for sentinel from 0x" << std::hex << read_offset
+              << ", 0x" << read_buf.length() << std::dec << " bytes available" << dendl;
 
       do {
-        bufferlist::iterator p;
+        bufferlist::iterator p = read_buf.begin();
         uint64_t candidate_sentinel;
         ::decode(candidate_sentinel, p);
 
+        dout(4) << "Data at 0x" << std::hex << read_offset << " = 0x" << candidate_sentinel << std::dec << dendl;
+
         if (candidate_sentinel == JournalStream::sentinel) {
-          ranges_invalid.push_back(Range(gap_start, -1));
+          dout(4) << "Found sentinel at 0x" << std::hex << read_offset << std::dec << dendl;
+          ranges_invalid.push_back(Range(gap_start, read_offset));
+          gap = false;
+          break;
         } else {
           // No sentinel, discard this byte
           read_buf.splice(0, 1);
           read_offset += 1;
         }
       } while (read_buf.length() >= sizeof(JournalStream::sentinel));
-      
-      assert(0);
+      dout(4) << "read_buf size is " << read_buf.length() << dendl;
     } else {
       dout(10) << "Parsing data, 0x" << std::hex << read_buf.length() << std::dec << " bytes available" << dendl;
       while(true) {
@@ -605,10 +651,17 @@ int JournalScanner::scan_events()
         // blob would be readable.
         uint64_t start_ptr = 0;
         uint64_t consumed = journal_stream.read(read_buf, le_bl, start_ptr);
+        dout(10) << "Consumed 0x" << std::hex << consumed << std::dec << " bytes" << dendl;
         if (start_ptr != read_offset) {
-          derr << "Bad entry start ptr at 0x" << std::hex << start_ptr << std::dec << dendl;
+          derr << "Bad entry start ptr (0x" << std::hex << start_ptr << ") at 0x"
+              << read_offset << std::dec << dendl;
           gap = true;
           gap_start = read_offset;
+          // FIXME: given that entry was invalid, should we be skipping over it?
+          // maybe push bytes back onto start of read_buf and just advance one byte
+          // to start scanning instead.  e.g. if a bogus size value is found it can
+          // cause us to consume and thus skip a bunch of following valid events.
+          read_offset += consumed;
           break;
         }
 
@@ -617,7 +670,7 @@ int JournalScanner::scan_events()
           dout(10) << "Valid entry at 0x" << std::hex << read_offset << std::dec << dendl;
 
           if (filter.apply(read_offset, *le)) {
-            events[read_offset] = le;
+            events[read_offset] = EventRecord(le, consumed);
           } else {
             delete le;
           }
@@ -627,8 +680,7 @@ int JournalScanner::scan_events()
           dout(10) << "Invalid entry at 0x" << std::hex << read_offset << std::dec << dendl;
           gap = true;
           gap_start = read_offset;
-          read_buf.splice(0, 1);
-          read_offset += 1;
+          read_offset += consumed;
         }
       }
     }
@@ -642,7 +694,7 @@ int JournalScanner::scan_events()
   dout(4) << "Scanned objects, " << objects_missing.size() << " missing, " << objects_valid.size() << " valid" << dendl;
   dout(4) << "Events scanned, " << ranges_invalid.size() << " gaps" << dendl;
   dout(4) << "Found " << events_valid.size() << " valid events" << dendl;
-  dout(4) << "Selected " << events.size() << " events for output" << dendl;
+  dout(4) << "Selected " << events.size() << " events events for processing" << dendl;
 
   return 0;
 }
@@ -655,7 +707,7 @@ JournalScanner::~JournalScanner()
   }
   dout(4) << events.size() << " events" << dendl;
   for (EventMap::iterator i = events.begin(); i != events.end(); ++i) {
-    delete i->second;
+    delete i->second.log_event;
   }
   events.clear();
 }
@@ -790,7 +842,7 @@ void EventOutputter::binary() const
   // Binary output, files
   boost::filesystem::create_directories(boost::filesystem::path(path));
   for (JournalScanner::EventMap::const_iterator i = scan.events.begin(); i != scan.events.end(); ++i) {
-    LogEvent *le = i->second;
+    LogEvent *le = i->second.log_event;
     bufferlist le_bin;
     le->encode(le_bin);
 
@@ -811,7 +863,7 @@ void EventOutputter::json() const
   jf.open_array_section("journal");
   {
     for (JournalScanner::EventMap::const_iterator i = scan.events.begin(); i != scan.events.end(); ++i) {
-      LogEvent *le = i->second;
+      LogEvent *le = i->second.log_event;
       jf.open_object_section("log_event");
       {
         le->dump(&jf);
@@ -829,15 +881,20 @@ void EventOutputter::list() const
 {
   for (JournalScanner::EventMap::const_iterator i = scan.events.begin(); i != scan.events.end(); ++i) {
     std::vector<std::string> ev_paths;
+    EMetaBlob *emb = i->second.log_event->get_metablob();
+    if (emb) {
+      emb->get_paths(ev_paths);
+    }
+
     std::string detail;
-    if (i->second->get_type() == EVENT_UPDATE) {
-      EUpdate *eu = reinterpret_cast<EUpdate*>(i->second);
-      eu->metablob.get_paths(ev_paths);
+    if (i->second.log_event->get_type() == EVENT_UPDATE) {
+      EUpdate *eu = reinterpret_cast<EUpdate*>(i->second.log_event);
       detail = eu->type;
     }
+
     dout(1) << "0x"
       << std::hex << i->first << std::dec << " "
-      << i->second->get_type_str() << ": "
+      << i->second.log_event->get_type_str() << ": "
       << " (" << detail << ")" << dendl;
     for (std::vector<std::string>::iterator i = ev_paths.begin(); i != ev_paths.end(); ++i) {
       dout(1) << "  " << *i << dendl;
@@ -849,7 +906,7 @@ void EventOutputter::summary() const
 {
   std::map<std::string, int> type_count;
   for (JournalScanner::EventMap::const_iterator i = scan.events.begin(); i != scan.events.end(); ++i) {
-    std::string const type = i->second->get_type_str();
+    std::string const type = i->second.log_event->get_type_str();
     if (type_count.count(type) == 0) {
       type_count[type] = 0;
     }
@@ -1120,3 +1177,75 @@ int JournalTool::replay_offline(EMetaBlob &metablob, bool const dry_run)
   return 0;
 }
 
+
+/**
+ * Erase a region of the log by overwriting it with ENoOp
+ *
+ */
+int JournalTool::erase_region(uint64_t const pos, uint64_t const length)
+{
+  // To erase this region, we use our preamble, the encoding overhead
+  // of an ENoOp, and our trailing start ptr.  Calculate how much padding
+  // is needed inside the ENoOp to make up the difference.
+  bufferlist tmp;
+  ENoOp enoop(0);
+  enoop.encode_with_header(tmp);
+
+  dout(4) << "erase_region " << pos << " len=" << length << dendl;
+
+  // FIXME: get the preamble/postamble length via JournalStream
+  int32_t padding = length - tmp.length() - sizeof(uint32_t) - sizeof(uint64_t) - sizeof(uint64_t);
+  dout(4) << "erase_region padding=0x" << std::hex << padding << std::dec << dendl;
+
+  if (padding < 0) {
+    derr << "Erase region " << length << " too short" << dendl;
+    return -EINVAL;
+  }
+
+  // Serialize an ENoOp with the correct amount of padding
+  enoop = ENoOp(padding);
+  bufferlist entry;
+  enoop.encode_with_header(entry);
+  JournalStream stream(JOURNAL_FORMAT_RESILIENT);
+
+  // Serialize region of log stream
+  bufferlist log_data;
+  stream.write(entry, log_data, pos);
+
+  dout(4) << "erase_region data length " << log_data.length() << dendl;
+  assert(log_data.length() == length);
+
+  // Write log stream region to RADOS
+  // FIXME: get object size somewhere common to scan_events
+  uint32_t object_size = g_conf->mds_log_segment_size;
+  if (object_size == 0) {
+    // Default layout object size
+    object_size = g_default_file_layout.fl_object_size;
+  }
+
+  uint64_t write_offset = pos;
+  uint64_t obj_offset = (pos / object_size);
+  int r = 0;
+  while(log_data.length()) {
+    std::string const oid = obj_name(obj_offset, rank);
+    uint32_t offset_in_obj = write_offset % object_size;
+    uint32_t write_len = min(log_data.length(), object_size - offset_in_obj);
+
+    r = io.write(oid, log_data, write_len, offset_in_obj);
+    if (r < 0) {
+      return r;
+    } else if ((uint32_t)r != write_len) {
+      derr << "Write failed, attempted " << write_len << " but got " << r << dendl;
+      return -EIO;
+    } else {
+      dout(4) << "Wrote " << write_len << " bytes to " << oid << dendl;
+      r = 0;
+    }
+     
+    log_data.splice(0, write_len);
+    write_offset += write_len;
+    obj_offset++;
+  }
+
+  return r;
+}
