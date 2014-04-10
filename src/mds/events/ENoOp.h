@@ -24,7 +24,6 @@ public:
   ENoOp() : LogEvent(EVENT_NOOP), size(0) { }
   ENoOp(uint32_t size_) : LogEvent(EVENT_NOOP), size(size){ }
 
-
   void encode(bufferlist& bl) const;
   void decode(bufferlist::iterator& bl);
   void dump(Formatter *f) const {}

@@ -36,6 +36,8 @@
 #include "events/ETableClient.h"
 #include "events/ETableServer.h"
 
+#include "events/ENoOp.h"
+
 
 LogEvent *LogEvent::decode(bufferlist& bl)
 {
@@ -82,6 +84,7 @@ std::string LogEvent::get_type_str() const
   case EVENT_COMMITTED: return "COMMITTED";
   case EVENT_TABLECLIENT: return "TABLECLIENT";
   case EVENT_TABLESERVER: return "TABLESERVER";
+  case EVENT_NOOP: return "NOOP";
 
   default:
     generic_dout(0) << "get_type_str: unknown type " << _type << dendl;
@@ -114,6 +117,7 @@ LogEvent::EventType LogEvent::str_to_type(std::string const &str)
   types["COMMITTED"] = EVENT_COMMITTED;
   types["TABLECLIENT"] = EVENT_TABLECLIENT;
   types["TABLESERVER"] = EVENT_TABLESERVER;
+  types["NOOP"] = EVENT_NOOP;
 
   return types[str];
 }
@@ -150,6 +154,8 @@ LogEvent *LogEvent::decode_event(bufferlist& bl, bufferlist::iterator& p, LogEve
 
   case EVENT_TABLECLIENT: le = new ETableClient; break;
   case EVENT_TABLESERVER: le = new ETableServer; break;
+
+  case EVENT_NOOP: le = new ENoOp; break;
 
   default:
     generic_dout(0) << "uh oh, unknown log event type " << type << " length " << length << dendl;
