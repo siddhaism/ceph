@@ -75,12 +75,13 @@ class DispatchQueue;
       std::deque< pair<utime_t,Message*> > delay_queue;
       Mutex delay_lock;
       Cond delay_cond;
+      int flush_count;
       bool stop_delayed_delivery;
 
     public:
       DelayedDelivery(Pipe *p)
 	: pipe(p),
-	  delay_lock("Pipe::DelayedDelivery::delay_lock"),
+	  delay_lock("Pipe::DelayedDelivery::delay_lock"), flush_count(0),
 	  stop_delayed_delivery(false) { }
       ~DelayedDelivery() {
 	discard();
@@ -93,11 +94,28 @@ class DispatchQueue;
       }
       void discard();
       void flush();
+      bool is_flushing() {
+        Mutex::Locker l(delay_lock);
+        return flush_count > 0;
+      }
+      void wait_for_flush() {
+        Mutex::Locker l(delay_lock);
+        while (flush_count > 0)
+          delay_cond.Wait(delay_lock);
+      }
       void stop() {
 	delay_lock.Lock();
 	stop_delayed_delivery = true;
 	delay_cond.Signal();
 	delay_lock.Unlock();
+      }
+      void steal_queue(DelayedDelivery *o) {
+        Mutex::Locker l(delay_lock);
+        Mutex::Locker l2(o->delay_lock);
+        delay_queue.swap(o->delay_queue);
+        flush_count = o->flush_count;
+        o->flush_count = 0;
+        o->delay_cond.Signal();
       }
     } *delay_thread;
     friend class DelayedDelivery;
