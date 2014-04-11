@@ -44,6 +44,9 @@ class JournalFilter
   dirfrag_t frag;
   std::string frag_dentry;  //< optional, filter dentry name within fragment
 
+  /* Filtering by metablob client name */
+  entity_name_t client_name;
+
   public:
   JournalFilter() : 
     range_start(0),

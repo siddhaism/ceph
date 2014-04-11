@@ -16,8 +16,8 @@
 #include "mds/Resetter.h"
 #include "mds/events/ENoOp.h"
 
-// Hack, special case for getting metablob, replace with generic
 #include "mds/events/EUpdate.h"
+#include "mds/events/ESession.h"
 
 
 #include "JournalTool.h"
@@ -749,6 +749,23 @@ bool JournalFilter::apply(uint64_t pos, LogEvent &le) const
     }
   }
 
+  /* Filtering by client */
+  if (client_name.num()) {
+    EMetaBlob *metablob = le.get_metablob();
+    if (metablob) {
+      if (metablob->get_client_name() != client_name) {
+        return false;
+      }
+    } else if (le.get_type() == EVENT_SESSION) {
+      ESession *es = reinterpret_cast<ESession*>(&le);
+      if (es->get_client_inst().name != client_name) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+  }
+
   /* Filtering by inode */
   if (inode) {
     EMetaBlob *metablob = le.get_metablob();
@@ -1001,6 +1018,16 @@ int JournalFilter::parse_args(
       dout(4) << "dirfrag filter: '" << frag << "'" << dendl;
     } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--dname", (char*)NULL)) {
       frag_dentry = arg_str;
+      dout(4) << "dentry filter: '" << frag_dentry << "'" << dendl;
+    } else if (ceph_argparse_witharg(argv, arg, &arg_str, "--client", (char*)NULL)) {
+      std::string parse_err;
+      int64_t client_num = strict_strtoll(arg_str.c_str(), 0, &parse_err);
+      if (!parse_err.empty()) {
+        derr << "Invalid client number " << arg_str << dendl;
+        return -EINVAL;
+      }
+      client_name = entity_name_t::CLIENT(client_num);
+      
       dout(4) << "dentry filter: '" << frag_dentry << "'" << dendl;
     } else {
       // We're done with args the filter understands
