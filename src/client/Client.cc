@@ -8958,6 +8958,12 @@ void Client::ms_handle_remote_reset(Connection *con)
 	  break;
 
 	case MetaSession::STATE_OPEN:
+	  if (cct->_conf->client_recover_session_reset) {
+	    ldout(cct, 1) << "reset from mds we were open; kicking requests" << dendl;
+	    _closed_mds_session(s);
+	  }
+	  break;
+
 	case MetaSession::STATE_NEW:
 	case MetaSession::STATE_CLOSED:
 	default:
