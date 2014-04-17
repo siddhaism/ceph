@@ -14,6 +14,10 @@
 
 #include "SnapMapper.h"
 
+#define dout_subsys ceph_subsys_osd
+#undef dout_prefix
+#define dout_prefix *_dout << "snap_mapper."
+
 using std::string;
 
 const string SnapMapper::MAPPING_PREFIX = "MAP_";
@@ -147,6 +151,7 @@ int SnapMapper::get_snaps(
     ::decode(*out, bp);
     assert(!out->snaps.empty());
   }
+  dout(20) << __func__ << " " << oid << " " << out->snaps << dendl;
   return 0;
 }
 
@@ -179,6 +184,8 @@ int SnapMapper::update_snaps(
   const set<snapid_t> *old_snaps_check,
   MapCacher::Transaction<std::string, bufferlist> *t)
 {
+  dout(20) << __func__ << " " << oid << " " << new_snaps
+	   << " was " << old_snaps_check << dendl;
   assert(check(oid));
   if (new_snaps.empty())
     return remove_oid(oid, t);
@@ -210,6 +217,7 @@ void SnapMapper::add_oid(
   set<snapid_t> snaps,
   MapCacher::Transaction<std::string, bufferlist> *t)
 {
+  dout(20) << __func__ << " " << oid << " " << snaps << dendl;
   assert(check(oid));
   {
     object_snaps out;
@@ -267,6 +275,7 @@ int SnapMapper::remove_oid(
   const hobject_t &oid,
   MapCacher::Transaction<std::string, bufferlist> *t)
 {
+  dout(20) << __func__ << " " << oid << dendl;
   assert(check(oid));
   return _remove_oid(oid, t);
 }
