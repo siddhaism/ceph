@@ -103,12 +103,7 @@ class DispatchQueue;
         while (flush_count > 0)
           delay_cond.Wait(delay_lock);
       }
-      void stop() {
-	delay_lock.Lock();
-	stop_delayed_delivery = true;
-	delay_cond.Signal();
-	delay_lock.Unlock();
-      }
+      void stop();
       void steal_queue(DelayedDelivery *o) {
         Mutex::Locker l(delay_lock);
         Mutex::Locker l2(o->delay_lock);
