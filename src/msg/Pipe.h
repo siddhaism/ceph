@@ -76,12 +76,14 @@ class DispatchQueue;
       Mutex delay_lock;
       Cond delay_cond;
       int flush_count;
+      bool active_flush;
       bool stop_delayed_delivery;
 
     public:
       DelayedDelivery(Pipe *p)
 	: pipe(p),
 	  delay_lock("Pipe::DelayedDelivery::delay_lock"), flush_count(0),
+	  active_flush(false),
 	  stop_delayed_delivery(false) { }
       ~DelayedDelivery() {
 	discard();
@@ -96,11 +98,11 @@ class DispatchQueue;
       void flush();
       bool is_flushing() {
         Mutex::Locker l(delay_lock);
-        return flush_count > 0;
+        return flush_count > 0 || active_flush;
       }
       void wait_for_flush() {
         Mutex::Locker l(delay_lock);
-        while (flush_count > 0)
+        while (flush_count > 0 || active_flush)
           delay_cond.Wait(delay_lock);
       }
       void stop() {
