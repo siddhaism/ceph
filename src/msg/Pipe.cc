@@ -619,12 +619,10 @@ int Pipe::accept()
     // make existing Connection reference us
     connection_state->reset_pipe(this);
 
-    // flush/queue any existing delayed messages
     if (existing->delay_thread) {
-      maybe_start_delay_thread();
-      assert(delay_thread); // prior incarnation got one, so do we
-      delay_thread->steal_queue(existing->delay_thread);
-      existing->delay_thread->stop();
+      existing->delay_thread->steal_for_pipe(this);
+      delay_thread = existing->delay_thread;
+      existing->delay_thread = NULL;
       delay_thread->flush();
     }
 

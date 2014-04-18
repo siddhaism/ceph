@@ -111,13 +111,9 @@ class DispatchQueue;
 	delay_cond.Signal();
 	delay_lock.Unlock();
       }
-      void steal_queue(DelayedDelivery *o) {
+      void steal_for_pipe(Pipe *new_owner) {
         Mutex::Locker l(delay_lock);
-        Mutex::Locker l2(o->delay_lock);
-        delay_queue.swap(o->delay_queue);
-        flush_count = o->flush_count;
-        o->flush_count = 0;
-        o->delay_cond.Signal();
+        pipe = new_owner;
       }
     } *delay_thread;
     friend class DelayedDelivery;
