@@ -1536,6 +1536,7 @@ void PG::activate(ObjectStore::Transaction& t,
 	pi.last_complete = info.last_update;
 	pi.last_backfill = hobject_t();
 	pi.history = info.history;
+	pi.hit_set = info.hit_set;
 	pi.stats.stats.clear();
 
 	m = new MOSDPGLog(
@@ -2860,18 +2861,18 @@ void PG::update_snap_map(
 /**
  * filter trimming|trimmed snaps out of snapcontext
  */
-void PG::filter_snapc(SnapContext& snapc)
+void PG::filter_snapc(vector<snapid_t> &snaps)
 {
   bool filtering = false;
   vector<snapid_t> newsnaps;
-  for (vector<snapid_t>::iterator p = snapc.snaps.begin();
-       p != snapc.snaps.end();
+  for (vector<snapid_t>::iterator p = snaps.begin();
+       p != snaps.end();
        ++p) {
     if (snap_trimq.contains(*p) || info.purged_snaps.contains(*p)) {
       if (!filtering) {
 	// start building a new vector with what we've seen so far
-	dout(10) << "filter_snapc filtering " << snapc << dendl;
-	newsnaps.insert(newsnaps.begin(), snapc.snaps.begin(), p);
+	dout(10) << "filter_snapc filtering " << snaps << dendl;
+	newsnaps.insert(newsnaps.begin(), snaps.begin(), p);
 	filtering = true;
       }
       dout(20) << "filter_snapc  removing trimq|purged snap " << *p << dendl;
@@ -2881,8 +2882,8 @@ void PG::filter_snapc(SnapContext& snapc)
     }
   }
   if (filtering) {
-    snapc.snaps.swap(newsnaps);
-    dout(10) << "filter_snapc  result " << snapc << dendl;
+    snaps.swap(newsnaps);
+    dout(10) << "filter_snapc  result " << snaps << dendl;
   }
 }
 
@@ -3873,6 +3874,7 @@ void PG::chunky_scrub(ThreadPool::TPHandle &handle)
         scrubber.received_maps.clear();
 
         {
+	  hobject_t end;
 
           // get the start and end of our scrub chunk
           //
@@ -3891,11 +3893,11 @@ void PG::chunky_scrub(ThreadPool::TPHandle &handle)
 	      cct->_conf->osd_scrub_chunk_max,
 	      0,
 	      &objects,
-	      &scrubber.end);
+	      &end);
             assert(ret >= 0);
 
             // in case we don't find a boundary: start again at the end
-            start = scrubber.end;
+            start = end;
 
             // special case: reached end of file store, implicitly a boundary
             if (objects.empty()) {
@@ -3903,19 +3905,25 @@ void PG::chunky_scrub(ThreadPool::TPHandle &handle)
             }
 
             // search backward from the end looking for a boundary
-            objects.push_back(scrubber.end);
+            objects.push_back(end);
             while (!boundary_found && objects.size() > 1) {
               hobject_t end = objects.back().get_boundary();
               objects.pop_back();
 
               if (objects.back().get_filestore_key() != end.get_filestore_key()) {
-                scrubber.end = end;
+                end = end;
                 boundary_found = true;
               }
             }
           }
-        }
 
+	  if (!_range_available_for_scrub(scrubber.start, end)) {
+	    // we'll be requeued by whatever made us unavailable for scrub
+	    done = true;
+	    break;
+	  }
+	  scrubber.end = end;
+        }
         scrubber.block_writes = true;
 
         // walk the log to find the latest update that affects our chunk
@@ -6591,6 +6599,7 @@ boost::statechart::result PG::RecoveryState::Stray::react(const MInfoRec& infoev
     ObjectStore::Transaction* t = context<RecoveryMachine>().get_cur_transaction();
     pg->rewind_divergent_log(*t, infoevt.info.last_update);
     pg->info.stats = infoevt.info.stats;
+    pg->info.hit_set = infoevt.info.hit_set;
   }
   
   assert(infoevt.info.last_update == pg->info.last_update);

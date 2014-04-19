@@ -528,6 +528,8 @@ OPTION(osd_op_complaint_time, OPT_FLOAT, 30) // how many seconds old makes an op
 OPTION(osd_command_max_records, OPT_INT, 256)
 OPTION(osd_op_log_threshold, OPT_INT, 5) // how many op log messages to show in one go
 OPTION(osd_verify_sparse_read_holes, OPT_BOOL, false)  // read fiemap-reported holes and verify they are zeros
+OPTION(osd_debug_enable_pin_obc, OPT_BOOL, false)
+OPTION(osd_debug_pin_obc_probability, OPT_DOUBLE, 0)
 OPTION(osd_debug_drop_ping_probability, OPT_DOUBLE, 0)
 OPTION(osd_debug_drop_ping_duration, OPT_INT, 0)
 OPTION(osd_debug_drop_pg_create_probability, OPT_DOUBLE, 0)

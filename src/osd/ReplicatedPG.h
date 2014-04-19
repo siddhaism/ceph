@@ -198,17 +198,21 @@ public:
   friend class PromoteCallback;
 
   struct FlushOp {
-    OpContext *ctx;             ///< the parent OpContext
-    list<OpRequestRef> dup_ops; ///< dup flush requests
+    ObjectContextRef obc;       ///< obc we are flushing
+    OpRequestRef op;            ///< initiating op
+    list<OpRequestRef> dup_ops; ///< bandwagon jumpers
     version_t flushed_version;  ///< user version we are flushing
     ceph_tid_t objecter_tid;    ///< copy-from request tid
     int rval;                   ///< copy-from result
     bool blocking;              ///< whether we are blocking updates
     bool removal;               ///< we are removing the backend object
+    Context *on_flush;          ///< callback, may be null
 
     FlushOp()
-      : ctx(NULL), objecter_tid(0), rval(0),
-	blocking(false), removal(false) {}
+      : objecter_tid(0), rval(0),
+	blocking(false), removal(false),
+	on_flush(NULL) {}
+    ~FlushOp() { assert(!on_flush); }
   };
   typedef boost::shared_ptr<FlushOp> FlushOpRef;
 
@@ -341,9 +345,14 @@ public:
   }
   void log_operation(
     vector<pg_log_entry_t> &logv,
+    boost::optional<pg_hit_set_history_t> &hset_history,
     const eversion_t &trim_to,
     bool transaction_applied,
     ObjectStore::Transaction *t) {
+    if (hset_history) {
+      info.hit_set = *hset_history;
+      dirty_info = true;
+    }
     append_log(logv, trim_to, *t, transaction_applied);
   }
 
@@ -453,6 +462,7 @@ public:
 
     PGBackend::PGTransaction *op_t;
     vector<pg_log_entry_t> log;
+    boost::optional<pg_hit_set_history_t> updated_hset_history;
 
     interval_set<uint64_t> modified_ranges;
     ObjectContextRef obc;
@@ -714,15 +724,27 @@ protected:
     bool requeue_recovery = false;
     bool requeue_recovery_clone = false;
     bool requeue_recovery_snapset = false;
+    bool requeue_snaptrimmer = false;
+    bool requeue_snaptrimmer_clone = false;
+    bool requeue_snaptrimmer_snapset = false;
     switch (ctx->lock_to_release) {
     case OpContext::W_LOCK:
       if (ctx->snapset_obc && ctx->release_snapset_obc) {
-	ctx->snapset_obc->put_write(&to_req, &requeue_recovery_snapset);
+	ctx->snapset_obc->put_write(
+	  &to_req,
+	  &requeue_recovery_snapset,
+	  &requeue_snaptrimmer_snapset);
 	ctx->release_snapset_obc = false;
       }
-      ctx->obc->put_write(&to_req, &requeue_recovery);
+      ctx->obc->put_write(
+	&to_req,
+	&requeue_recovery,
+	&requeue_snaptrimmer);
       if (ctx->clone_obc)
-	ctx->clone_obc->put_write(&to_req, &requeue_recovery_clone);
+	ctx->clone_obc->put_write(
+	  &to_req,
+	  &requeue_recovery_clone,
+	  &requeue_snaptrimmer_clone);
       break;
     case OpContext::R_LOCK:
       if (ctx->snapset_obc && ctx->release_snapset_obc) {
@@ -740,6 +762,10 @@ protected:
     ctx->lock_to_release = OpContext::NONE;
     if (requeue_recovery || requeue_recovery_clone || requeue_recovery_snapset)
       osd->recovery_wq.queue(this);
+    if (requeue_snaptrimmer ||
+	requeue_snaptrimmer_clone ||
+	requeue_snaptrimmer_snapset)
+      queue_snap_trim();
     requeue_ops(to_req);
   }
 
@@ -839,6 +865,7 @@ protected:
   friend struct C_OnPushCommit;
 
   // projected object info
+  map<hobject_t, ObjectContextRef> pinned_object_contexts;
   SharedPtrRegistry<hobject_t, ObjectContext> object_contexts;
   // map from oid.snapdir() to SnapSetContext *
   map<hobject_t, SnapSetContext*> snapset_contexts;
@@ -878,6 +905,7 @@ protected:
   int find_object_context(const hobject_t& oid,
 			  ObjectContextRef *pobc,
 			  bool can_create,
+			  bool map_snapid_to_clone=false,
 			  hobject_t *missing_oid=NULL);
 
   void add_object_context_to_pg_stat(ObjectContextRef obc, pg_stat_t *stat);
@@ -1198,7 +1226,11 @@ protected:
   // -- flush --
   map<hobject_t, FlushOpRef> flush_ops;
 
-  int start_flush(OpContext *ctx, bool blocking, hobject_t *pmissing);
+  /// start_flush takes ownership of on_flush iff ret == -EINPROGRESS
+  int start_flush(
+    OpRequestRef op, ObjectContextRef obc,
+    bool blocking, hobject_t *pmissing,
+    Context *on_flush);
   void finish_flush(hobject_t oid, ceph_tid_t tid, int r);
   int try_flush_mark_clean(FlushOpRef fop);
   void cancel_flush(FlushOpRef fop, bool requeue);
@@ -1210,6 +1242,8 @@ protected:
   friend struct C_Flush;
 
   // -- scrub --
+  virtual bool _range_available_for_scrub(
+    const hobject_t &begin, const hobject_t &end);
   virtual void _scrub(ScrubMap& map);
   virtual void _scrub_clear_state();
   virtual void _scrub_finish();
@@ -1350,6 +1384,7 @@ public:
   bool is_degraded_object(const hobject_t& oid);
   void wait_for_degraded_object(const hobject_t& oid, OpRequestRef op);
 
+  bool maybe_await_blocked_snapset(const hobject_t &soid, OpRequestRef op);
   void wait_for_blocked_object(const hobject_t& soid, OpRequestRef op);
   void kick_object_context_blocked(ObjectContextRef obc);
 
