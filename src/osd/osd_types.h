@@ -1125,6 +1125,7 @@ struct object_stat_sum_t {
   int64_t num_objects_dirty;
   int64_t num_whiteouts;
   int64_t num_objects_omap;
+  int64_t num_objects_hit_set_archive;
 
   object_stat_sum_t()
     : num_bytes(0),
@@ -1138,7 +1139,8 @@ struct object_stat_sum_t {
       num_keys_recovered(0),
       num_objects_dirty(0),
       num_whiteouts(0),
-      num_objects_omap(0)
+      num_objects_omap(0),
+      num_objects_hit_set_archive(0)
   {}
 
   void floor(int64_t f) {
@@ -1163,6 +1165,7 @@ struct object_stat_sum_t {
     FLOOR(num_objects_dirty);
     FLOOR(num_whiteouts);
     FLOOR(num_objects_omap);
+    FLOOR(num_objects_hit_set_archive);
 #undef FLOOR
   }
 
@@ -1195,6 +1198,7 @@ struct object_stat_sum_t {
     SPLIT(num_objects_dirty);
     SPLIT(num_whiteouts);
     SPLIT(num_objects_omap);
+    SPLIT(num_objects_hit_set_archive);
 #undef SPLIT
   }
 
@@ -1326,6 +1330,7 @@ struct pg_stat_t {
   /// maintained starting from pool creation)
   bool dirty_stats_invalid;
   bool omap_stats_invalid;
+  bool hitset_stats_invalid;
 
   /// up, acting primaries
   int up_primary;
@@ -2704,6 +2709,9 @@ public:
     /// if set, restart backfill when we can get a read lock
     bool backfill_read_marker;
 
+    /// if set, requeue snaptrim on lock release
+    bool snaptrimmer_write_marker;
+
     RWState() : state(RWNONE), count(0), backfill_read_marker(false) {}
     bool get_read(OpRequestRef op) {
       if (get_read_lock()) {
@@ -2797,6 +2805,10 @@ public:
   bool get_write(OpRequestRef op) {
     return rwstate.get_write(op);
   }
+  bool get_snaptrimmer_write() {
+    rwstate.snaptrimmer_write_marker = true;
+    return rwstate.get_write_lock();
+  }
   bool get_backfill_read() {
     rwstate.backfill_read_marker = true;
     if (rwstate.get_read_lock()) {
@@ -2813,11 +2825,16 @@ public:
     rwstate.put_read(to_wake);
   }
   void put_write(list<OpRequestRef> *to_wake,
-		 bool *requeue_recovery) {
+		 bool *requeue_recovery,
+		 bool *requeue_snaptrimmer) {
     rwstate.put_write(to_wake);
     if (rwstate.empty() && rwstate.backfill_read_marker) {
       rwstate.backfill_read_marker = false;
       *requeue_recovery = true;
+    }
+    if (rwstate.empty() && rwstate.snaptrimmer_write_marker) {
+      rwstate.snaptrimmer_write_marker = false;
+      *requeue_snaptrimmer = true;
     }
   }
 
